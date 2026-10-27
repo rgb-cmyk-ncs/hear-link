@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Launcher icon: a dot sending sound waves to the right. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path android:fillColor="#FF35D07F" android:pathData="M40,54m-9,0a9,9 0,1 1,18 0a9,9 0,1 1,-18 0" />
+    <path android:strokeColor="#FFECEEF2" android:strokeWidth="5" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M56,42a17,17 0,0 1,0 24" />
+    <path android:strokeColor="#FFECEEF2" android:strokeWidth="5" android:strokeLineCap="round" android:fillColor="#00000000"
+        android:pathData="M65,34a28,28 0,0 1,0 40" />
+</vector>
