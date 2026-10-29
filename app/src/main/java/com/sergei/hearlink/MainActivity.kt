@@ -62,8 +62,7 @@ class MainActivity : Activity(), Relay.Listener {
                 val tones = p.howlTones
                 val parts = ArrayList<String>()
                 if (tones.isNotEmpty()) parts.add("Squeal stopped at " + tones.joinToString(", ") { if (it >= 1000) String.format(java.util.Locale.US, "%.1f kHz", it / 1000f) else "$it Hz" } + ".")
-                if (cut < -0.5f) parts.add(String.format(java.util.Locale.US, "Volume held back %.0f dB to stop echo and squeal; it comes back slowly. Keep the phone further from the headphones.", -cut))
-                if (p.loopDelayMs > 0) parts.add("Own sound came back after ${p.loopDelayMs} ms (Bluetooth delay).")
+                if (cut < -0.5f) parts.add(String.format(java.util.Locale.US, "Volume held back %.0f dB. Keep the phone further from the headphones.", -cut))
                 guardView.visibility = if (parts.isEmpty()) View.GONE else View.VISIBLE
                 guardView.text = parts.joinToString(" ")
             } else {

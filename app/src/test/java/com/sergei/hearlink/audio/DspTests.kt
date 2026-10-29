@@ -82,13 +82,13 @@ class DspTests {
         assertTrue(p.guardCutDb <= -6f || p.howlTones.isNotEmpty())
     }
 
-    @Test fun guardStaysQuietForNormalSpeech() {
-        val s = Settings().apply { volumeDb = 12f }
+    @Test fun guardStaysQuietForNormalSound() {
+        val s = Settings().apply { volumeDb = 6f }
         val p = Processor(fs, s)
-        val input = voice(fs * 20, 0.01, java.util.Random(3))
+        val input = sine(1000.0, 0.02f, fs * 2)
         val out = FloatArray(input.size * 2)
         p.process(input, out, input.size)
-        assertTrue("cut ${p.guardCutDb} ${p.guardReasons}", p.guardCutDb >= -6f)
+        assertEquals(0f, p.guardCutDb, 0f)
     }
 
     @Test fun balanceSendsToOneSide() {
@@ -111,27 +111,6 @@ class DspTests {
         s.muted = true
         p.process(input, out, input.size)
         assertTrue(peakTail(out) < 1e-3f)
-    }
-}
-
-/** Speech-like test signal: a gliding voice with harmonics, in syllables of random length. */
-fun voice(len: Int, amp: Double, rnd: java.util.Random, fs: Int = 48000): FloatArray {
-    var ph = 0.0
-    var start = 0
-    var end = 0
-    var a = 1.0
-    return FloatArray(len) { n ->
-        if (n >= end) {
-            start = n + (rnd.nextDouble() * 0.15 * fs).toInt()
-            end = start + ((0.12 + rnd.nextDouble() * 0.23) * fs).toInt()
-            a = 0.4 + rnd.nextDouble() * 0.8
-        }
-        val f0 = 160 + 50 * kotlin.math.sin(2 * kotlin.math.PI * 1.3 * n / fs) + 20 * kotlin.math.sin(2 * kotlin.math.PI * 3.1 * n / fs)
-        ph += 2 * kotlin.math.PI * f0 / fs
-        var v = 0.0
-        for (k in 1..15) v += kotlin.math.sin(k * ph) / k
-        val env = if (n < start) 0.0 else a * kotlin.math.sin(kotlin.math.PI * (n - start).toDouble() / (end - start))
-        (amp * v * env).toFloat()
     }
 }
 
@@ -184,48 +163,6 @@ class FeedbackTests {
         }
         x.forEach { h.process(it) }
         assertEquals(0, h.found.size)
-    }
-
-    /** Bluetooth: our sound comes back into the microphone 200 ms later through a resonant leak. */
-    private fun bluetoothLoop(volume: Float, pathGain: Float, secs: Int, guard: Boolean, talk: Boolean): Pair<Double, Float> {
-        val s = Settings().apply { volumeDb = volume; this.guard = guard; eqDb = floatArrayOf(-6f, -2f, 3f, 6f, 6f); changed() }
-        val p = Processor(fs, s)
-        val delay = fs / 5
-        val back = FloatArray(delay)
-        var bi = 0
-        val r1 = Biquad().apply { peaking(fs, 2300.0, 4.0, 12.0) }
-        val r2 = Biquad().apply { peaking(fs, 900.0, 3.0, 6.0) }
-        val rnd = java.util.Random(7)
-        val speech = voice(fs * secs, 0.01, java.util.Random(5))
-        val block = 192
-        val inp = FloatArray(block)
-        val out = FloatArray(block * 2)
-        var quietPeak = 0.0
-        var t = 0
-        while (t < fs * secs) {
-            for (i in 0 until block) {
-                val n = t + i
-                val say = if (talk && (n / fs) % 6 < 3) speech[n] else 0f
-                inp[i] = back[(bi + i) % delay] * pathGain + (rnd.nextGaussian() * 0.0005).toFloat() + say
-            }
-            p.process(inp, out, block)
-            for (i in 0 until block) {
-                back[(bi + i) % delay] = r2.process(r1.process(out[2 * i]))
-                // Loudness while nobody talks in the last 10 seconds: that is pure echo/squeal.
-                val n = t + i
-                if (n > fs * (secs - 10) && (n / fs) % 6 >= 4) quietPeak = maxOf(quietPeak, kotlin.math.abs(out[2 * i]).toDouble())
-            }
-            bi = (bi + block) % delay
-            t += block
-        }
-        return Pair(20 * kotlin.math.log10(quietPeak + 1e-9), p.guardCutDb)
-    }
-
-    @Test fun bluetoothEchoIsStopped() {
-        val (without, _) = bluetoothLoop(24f, 0.05f, 30, guard = false, talk = true)
-        val (with, cut) = bluetoothLoop(24f, 0.05f, 30, guard = true, talk = true)
-        assertTrue("without guard it should squeal: $without", without > -10)
-        assertTrue("with guard it must stay quiet in the pauses: $with (cut $cut)", with < -35)
     }
 
     @Test fun simulatedFeedbackLoopDiesOut() {

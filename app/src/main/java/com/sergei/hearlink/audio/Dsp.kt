@@ -149,105 +149,33 @@ class Limiter(fs: Int, ceilingDb: Float = -3f) {
 }
 
 /**
- * Feedback manager. Feedback (the squeal when the headphones' sound reaches the microphone) is
- * stopped by turning the volume down 6 dB at once, at the first sign of it: a whistle found by
- * [HowlSuppressor], or sound that keeps hitting the limiter. The volume then creeps back only
- * very slowly (1 dB every few seconds of calm), so it settles just below the point where it squeals
- * instead of squealing again and again.
+ * Feedback (the squeal when the headphones are near the phone) shows up as sound that keeps
+ * hitting the limiter without a break. When that happens it turns the volume down 6 dB,
+ * then lets it come back slowly.
  */
 class FeedbackGuard(private val fs: Int) {
     private var held = 0
-    private val holdLimit = fs / 4
-    private var calm = 0
-    private val calmBefore = fs * 6
-    private val calmStep = fs * 4
-    /** Where it squealed last time, minus a safety margin: the volume stays below this for a while. */
-    private var ceilingDb = 0f
-    private var ceilingAge = 0
-    private val ceilingRelax = fs * 60
+    private val holdLimit = fs / 2
+    private val recover = 1.5f / fs
 
     /** dB taken off right now (0 or negative). */
     var cutDb = 0f
         private set
 
-    /** How often it had to step in since starting. */
-    var events = 0
-        private set
-
-    /** Why it last stepped in (for testing). */
-    var reasons = ""
-    fun event(why: String = "") {
-        reasons += why + " "
-        ceilingDb = min(ceilingDb, cutDb - 3f)
-        ceilingAge = 0
-        cutDb = max(-40f, cutDb - 6f)
-        calm = 0
-        held = 0
-        events++
-    }
-
     /** Called once per sample with the limiter's gain. */
     fun update(limiterGain: Float) {
-        // Speech only touches the limit now and then; feedback leans on it without a break.
-        if (limiterGain < 0.8f) {
-            if (++held > holdLimit) event("limit")
+        if (limiterGain < 0.5f) {
+            if (++held > holdLimit) {
+                cutDb = max(-24f, cutDb - 6f)
+                held = 0
+            }
         } else {
             held = 0
-        }
-        if (++ceilingAge >= ceilingRelax && ceilingDb < 0f) {
-            ceilingDb = min(0f, ceilingDb + 1f) // the room may have changed: allow a little more
-            ceilingAge = 0
-        }
-        if (++calm >= calmBefore && cutDb < ceilingDb) {
-            cutDb = min(ceilingDb, cutDb + 1f)
-            calm = calmBefore - calmStep
+            if (limiterGain > 0.7f && cutDb < 0f) cutDb = min(0f, cutDb + recover)
         }
     }
 
-    // ---- no pauses: speech and TV always dip between words, feedback doesn't ----
-    private val envAtt = coef(fs, 5f)
-    private val envRel = coef(fs, 30f)
-    private var env = 0f
-    private val blockLen = fs / 20 // 50 ms
-    private var blockPos = 0
-    private var blockMin = Float.MAX_VALUE
-    private var blockMax = 0f
-    private val mins = FloatArray(40) // 2 seconds of blocks
-    private val maxs = FloatArray(40)
-    private var filled = 0
-    private var slot = 0
-
-    /** Called once per sample with the outgoing sound. */
-    fun level(x: Float) {
-        val a = kotlin.math.abs(x)
-        env = if (a > env) envAtt * env + (1 - envAtt) * a else envRel * env + (1 - envRel) * a
-        if (env < blockMin) blockMin = env
-        if (env > blockMax) blockMax = env
-        if (++blockPos < blockLen) return
-        mins[slot] = blockMin
-        maxs[slot] = blockMax
-        slot = (slot + 1) % mins.size
-        if (filled < mins.size) filled++
-        blockPos = 0
-        blockMin = Float.MAX_VALUE
-        blockMax = 0f
-        if (filled < mins.size) return
-        var lo = Float.MAX_VALUE
-        var hiMin = Float.MAX_VALUE
-        var hi = 0f
-        for (i in mins.indices) {
-            lo = min(lo, mins[i])
-            hi = max(hi, maxs[i])
-            hiMin = min(hiMin, maxs[i])
-        }
-        // Loud the whole time (every 50 ms above -30 dBFS) and never more than 12 dB quieter.
-        if (linToDb(hiMin) > -30f && linToDb(lo) > linToDb(hi) - 12f) {
-            event("nopause")
-            filled = 0
-        }
-    }
-
-    fun reset() { held = 0; calm = 0; cutDb = 0f; ceilingDb = 0f; ceilingAge = 0; events = 0; filled = 0 }
+    fun reset() { held = 0; cutDb = 0f }
 }
 
 /** What the screen can change while sound is running. */
@@ -278,12 +206,6 @@ class Processor(private val fs: Int, private val s: Settings) {
     private val howl = HowlSuppressor(fs)
     private val shifter = FrequencyShifter(fs)
     private var howlReset = s.resetHowl
-    private var seenHowls = 0
-    private val echo = EchoDetector(fs)
-    /** Measured delay of the loop through the headphones and back, in ms (0 = not measured). */
-    val loopDelayMs: Int get() = echo.delayMs
-    /** For testing without the frequency shift. */
-    var shiftOn = true
     private val limiter = Limiter(fs)
     private var seen = -1
     private var gain = 0f
@@ -295,14 +217,13 @@ class Processor(private val fs: Int, private val s: Settings) {
     @Volatile var inPeak = 0f
     @Volatile var outPeak = 0f
     val guardCutDb: Float get() = guard.cutDb
-    val guardReasons: String get() = guard.reasons
     /** Squeal tones found and cut, in Hz. */
     val howlTones: List<Int> get() = howl.found
 
     private fun refresh() {
         seen = s.version
         eq.set(s.eqDb)
-        if (!s.guard) { guard.reset(); howl.reset(); echo.reset() }
+        if (!s.guard) { guard.reset(); howl.reset() }
         if (s.resetHowl != howlReset) { howlReset = s.resetHowl; howl.reset(); guard.reset() }
         val b = s.balance.coerceIn(-1f, 1f)
         left = if (b > 0f) 1f - b else 1f
@@ -329,21 +250,12 @@ class Processor(private val fs: Int, private val s: Settings) {
             gain = smooth * gain + (1 - smooth) * target
             x *= gain
             if (guardOn) {
-                // Anti-squeal: shift the pitch a few Hz, cut any tone that still builds up,
-                // and turn the whole sound down at once when that happens.
-                if (shiftOn) x = shifter.process(x)
+                // Anti-squeal: shift the pitch a few Hz, then cut any tone that still builds up.
+                x = shifter.process(x)
                 x = howl.process(x)
-                if (howl.detections != seenHowls) {
-                    seenHowls = howl.detections
-                    guard.event("tone")
-                }
             }
             x = limiter.process(x)
-            if (guardOn) {
-                guard.update(limiter.gain)
-                guard.level(x)
-                if (echo.push(input[i], x)) guard.event("echo")
-            }
+            if (guardOn) guard.update(limiter.gain)
             val ay = abs(x); if (ay > op) op = ay
             out[2 * i] = x * left
             out[2 * i + 1] = x * right
